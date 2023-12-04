@@ -1,7 +1,7 @@
 /** @file
   SSDT Serial Port Fixup Library.
 
-  Copyright (c) 2019 - 2021, Arm Limited. All rights reserved.<BR>
+  Copyright (c) 2019 - 2021, 2023, Arm Limited. All rights reserved.<BR>
 
   SPDX-License-Identifier: BSD-2-Clause-Patent
 
@@ -9,10 +9,12 @@
   - Arm Server Base Boot Requirements (SBBR), s4.2.1.8 "SPCR".
   - Microsoft Debug Port Table 2 (DBG2) Specification - December 10, 2015.
   - ACPI for Arm Components 1.0 - 2020
+  - Arm Generic Interrupt Controller Architecture Specification, Issue H, January 2022.
 **/
 
 #include <IndustryStandard/DebugPort2Table.h>
 #include <Library/AcpiLib.h>
+#include <Library/ArmGicArchLib.h>
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
@@ -270,7 +272,6 @@ FixupCrs (
   EFI_STATUS              Status;
   AML_OBJECT_NODE_HANDLE  NameOpCrsNode;
   AML_DATA_NODE_HANDLE    QWordRdNode;
-  AML_DATA_NODE_HANDLE    InterruptRdNode;
 
   // Get the "_CRS" object defined by the "Name ()" statement.
   Status = AmlFindNode (
@@ -303,20 +304,27 @@ FixupCrs (
     return Status;
   }
 
-  // Get the Interrupt node.
-  // It is the second Resource Data element in the NameOpCrsNode's
-  // variable list of arguments.
-  Status = AmlNameOpGetNextRdNode (QWordRdNode, &InterruptRdNode);
-  if (EFI_ERROR (Status)) {
-    return Status;
+  // Generate an interrupt node if the interrupt for the serial-port is a valid SPI.
+  // SPI ranges from Table 2-1 in Arm Generic Interrupt Controller Architecture Specification.
+  if (((SerialPortInfo->Interrupt >= ARM_GIC_ARCH_SPI_MIN) &&
+       (SerialPortInfo->Interrupt <= ARM_GIC_ARCH_SPI_MAX)) ||
+      ((SerialPortInfo->Interrupt >= ARM_GIC_ARCH_EXT_SPI_MIN) &&
+       (SerialPortInfo->Interrupt <= ARM_GIC_ARCH_EXT_SPI_MAX))) {
+    Status = AmlCodeGenRdInterrupt (
+              1,                   // Resource Consumer
+              0,                   // Level Triggered
+              0,                   // Active High
+              0,                   // Exclusive
+              (UINT32 *)&SerialPortInfo->Interrupt,
+              1,
+              NameOpCrsNode,
+              NULL
+    );
+    if (EFI_ERROR (Status)) {
+      return Status;
+    }
   }
-
-  if (InterruptRdNode == NULL) {
-    return EFI_INVALID_PARAMETER;
-  }
-
-  // Update the interrupt number.
-  return AmlUpdateRdInterrupt (InterruptRdNode, SerialPortInfo->Interrupt);
+  return EFI_SUCCESS;
 }
 
 /** Fixup the Serial Port device name.
